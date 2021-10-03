@@ -1,26 +1,31 @@
-FROM gitpod/workspace-base:latest
+FROM carlobellettini/java-docker
 
-LABEL dazzle/layer=lang-java
-LABEL dazzle/test=tests/lang-java.yaml
+RUN sudo install-packages xvfb x11vnc xterm openjfx libopenjfx-java openbox
+
+# Overwrite this env variable to use a different window manager
+ENV WINDOW_MANAGER="openbox"
+
+USER root
+
+# Install novnc
+RUN git clone --depth 1 https://github.com/novnc/noVNC.git /opt/novnc \
+    && git clone --depth 1 https://github.com/novnc/websockify /opt/novnc/utils/websockify
+RUN printf '<html><head><meta http-equiv="Refresh" content="0; url=vnc.html?autoconnect=true&reconnect=true&resize=scale"></head></html>' > /opt/novnc/index.html
+
+# Add VNC startup script
+COPY start-vnc-session.sh /usr/bin/
+RUN chmod +x /usr/bin/start-vnc-session.sh
+
+# This is a bit of a hack. At the moment we have no means of starting background
+# tasks from a Dockerfile. This workaround checks, on each bashrc eval, if the X
+# server is running on screen 0, and if not starts Xvfb, x11vnc and novnc.
+RUN echo "export DISPLAY=:0" >> ~/.bashrc
+RUN echo "[ ! -e /tmp/.X0-lock ] && (/usr/bin/start-vnc-session.sh &> /tmp/display-\${DISPLAY}.log)" >> ~/.bashrc
+
+### checks ###
+# no root-owned files in the home directory
+RUN notOwnedFile=$(find . -not "(" -user gitpod -and -group gitpod ")" -print -quit) \
+    && { [ -z "$notOwnedFile" ] \
+        || { echo "Error: not all files/dirs in $HOME are owned by 'gitpod' user & group"; exit 1; } }
+
 USER gitpod
-RUN curl -fsSL "https://get.sdkman.io" | bash \
- && bash -c ". /home/gitpod/.sdkman/bin/sdkman-init.sh \
-             && sdk install java 11.0.12.fx-zulu \
-             && sdk install gradle \
-             && sdk install maven \
-             && sdk flush archives \
-             && sdk flush temp \
-             && mkdir /home/gitpod/.m2 \
-             && printf '<settings>\n  <localRepository>/workspace/m2-repository/</localRepository>\n</settings>\n' > /home/gitpod/.m2/settings.xml \
-             && echo 'export SDKMAN_DIR=\"/home/gitpod/.sdkman\"' >> /home/gitpod/.bashrc.d/99-java \
-             && echo '[[ -s \"/home/gitpod/.sdkman/bin/sdkman-init.sh\" ]] && source \"/home/gitpod/.sdkman/bin/sdkman-init.sh\"' >> /home/gitpod/.bashrc.d/99-java"
-# above, we are adding the sdkman init to .bashrc (executing sdkman-init.sh does that), because one is executed on interactive shells, the other for non-interactive shells (e.g. plugin-host)
-ENV GRADLE_USER_HOME=/workspaces/.gradle/
-
-
-# merge GPG keys for trusted APT repositories
-RUN for i in $(ls /var/lib/apt/dazzle-marks/*.gpg); do apt-key add "$i"; done
-
-
-# share env see https://github.com/gitpod-io/workspace-images/issues/472
-RUN echo "PATH="${PATH}"" | sudo tee /etc/environment
